@@ -36,7 +36,9 @@ function App() {
     addLog("Iniciando processamento de 50 páginas...");
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+      // Transformamos em Uint8Array e passamos dentro de um objeto { data: ... }
+      const data = new Uint8Array(arrayBuffer);
+      const pdf = await pdfjsLib.getDocument({ data: data }).promise;
 
       if (pdf.numPages !== 50) {
         addLog(`ERRO: O PDF tem ${pdf.numPages} páginas. O sistema exige 50.`);
