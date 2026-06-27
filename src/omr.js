@@ -46,35 +46,43 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         let reta = new cv.Mat();
         cv.warpPerspective(binaria, reta, M, new cv.Size(800, 1131));
 
-        // COORDENADAS MILIMÉTRICAS DO NOVO GABARITO HTML
+        // --- CALIBRAÇÃO SINCRONIZADA COM GERADOR_TESTE.HTML ---
         const config = {
-            colunasX: [76, 461],        
-            opcoesX: [0, 39, 78, 117, 156], 
-            inicioY: 275,               
-            espacoY: 29.5, 
-            raio: 19
+            colunasX: [78, 468],        // X inicial das colunas
+            opcoesX: [0, 36.5, 73, 109.5, 146], // Espaço exato entre A-B-C-D-E
+            inicioY: 282,               // Onde começa a Questão 01
+            espacoY: 31.6,              // Aumentamos para 31.6 para corrigir o "Drift"
+            raio: 18                    // Tamanho da mira
         };
 
         let tempRes = [];
+        let corMira = new cv.Scalar(255, 0, 0, 255);
         let miraSeta = new cv.Mat.zeros(1131, 800, cv.CV_8UC4);
+
         for (let col = 0; col < 2; col++) {
             for (let q = 0; q < 26; q++) {
                 let marcadas = [];
                 for (let opt = 0; opt < 5; opt++) {
-                    let x = config.colunasX[col] + config.opcoesX[opt];
-                    let y = config.inicioY + (q * config.espacoY);
-                    
-                    // Desenha a mira vermelha para você conferir
-                    cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raio, y + config.raio), new cv.Scalar(255, 0, 0, 255), 1);
-                    
+                    let x = Math.round(config.colunasX[col] + config.opcoesX[opt]);
+                    let y = Math.round(config.inicioY + (q * config.espacoY));
+
+                    // Desenha o quadradinho da mira para você ver o ajuste
+                    cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raio, y + config.raio), corMira, 1);
+
                     let rect = new cv.Rect(x, y, config.raio, config.raio);
                     let roi = reta.roi(rect);
-                    if (cv.countNonZero(roi) > (config.raio * config.raio * 0.35)) marcadas.push(["A","B","C","D","E"][opt]);
+                    let totalPixels = cv.countNonZero(roi);
+                    
+                    // Reduzimos a exigência para 25% para capturar melhor
+                    if (totalPixels > (config.raio * config.raio * 0.25)) {
+                        marcadas.push(["A", "B", "C", "D", "E"][opt]);
+                    }
                     roi.delete();
                 }
                 tempRes.push(marcadas.length === 1 ? marcadas[0] : (marcadas.length > 1 ? "X" : ""));
             }
         }
+
         resultados = tempRes;
 
         let M_inv = cv.getPerspectiveTransform(ptsDestino, ptsOrigem);
