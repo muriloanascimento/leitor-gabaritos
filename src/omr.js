@@ -5,7 +5,7 @@ const esperarOpenCV = () => new Promise(res => {
     check();
 });
 
-export const processarProvaProfissional = async (canvasOriginal) => {
+export const processarProvaProfissional = async (canvasOriginal, setPreview) => {
     await esperarOpenCV();
     const cv = window.cv;
 
@@ -139,7 +139,22 @@ export const processarProvaProfissional = async (canvasOriginal) => {
             else resultados.push(""); // Em branco
         }
     }
+// <<-- ADICIONE ESTE BLOCO -->>
+    // Desenha os pontos verdes para o Visualizador de Alinhamento
+    let previewMat = new cv.Mat();
+    cv.cvtColor(cinza, previewMat, cv.COLOR_GRAY2RGBA);
+    let cor = new cv.Scalar(0, 255, 0, 255); // Verde Neon
+    cv.line(previewMat, new cv.Point(superior[0].x, superior[0].y), new cv.Point(superior[1].x, superior[1].y), cor, 2);
+    cv.line(previewMat, new cv.Point(superior[1].x, superior[1].y), new cv.Point(inferior[0].x, inferior[0].y), cor, 2);
+    cv.line(previewMat, new cv.Point(inferior[0].x, inferior[0].y), new cv.Point(inferior[1].x, inferior[1].y), cor, 2);
+    cv.line(previewMat, new cv.Point(inferior[1].x, inferior[1].y), new cv.Point(superior[0].x, superior[0].y), cor, 2);
 
+    // Converte a imagem para mostrar na tela
+    const canvasTemp = document.createElement('canvas');
+    cv.imshow(canvasTemp, previewMat);
+    setPreview(canvasTemp.toDataURL());
+    previewMat.delete();
+    
     // Limpeza de memória
     src.delete(); cinza.delete(); binaria.delete(); contornos.delete(); 
     hierarquia.delete(); ptsOrigem.delete(); ptsDestino.delete(); M.delete(); reta.delete();
