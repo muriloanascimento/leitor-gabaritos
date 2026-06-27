@@ -54,12 +54,13 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         cv.warpPerspective(binaria, reta, M, new cv.Size(800, 1100));
 
         // --- CALIBRAÇÃO REVISADA PARA O SEU PDF ---
+        // --- CALIBRAÇÃO FINAL (AJUSTADA PELA SUA FOTO) ---
         const config = {
-            colunasX: [106, 488], // Movemos para a esquerda (era 132)
-            opcoesX: [0, 44, 88, 132, 176], // Espaçamento entre A,B,C,D,E
-            inicioY: 288, // Movemos para baixo (era 275)
-            espacoY: 30.5,
-            raio: 16 // Diminuímos o tamanho da mira para não pegar a borda da bolinha
+            colunasX: [94, 476],      // Movemos 12 pixels para a esquerda
+            opcoesX: [0, 41, 82, 123, 164], // Diminuímos o espaço entre A,B,C,D,E (estava muito largo)
+            inicioY: 382,             // Baixamos MUITO a mira (estava em 288, subimos quase 100 pixels)
+            espacoY: 30.8,            // Ajuste fino da distância entre as linhas
+            raio: 18                  // Tamanho ideal para capturar o grafite
         };
 
         let tempRes = [];
