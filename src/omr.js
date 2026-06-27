@@ -1,4 +1,4 @@
-// src/omr.js
+// src/omr.js - VERSÃO FINAL SINCRONIZADA COM GABARITO HTML
 const esperarOpenCV = () => new Promise(res => {
     const check = () => (window.cv && window.cv.Mat) ? res() : setTimeout(check, 100);
     check();
@@ -7,13 +7,11 @@ const esperarOpenCV = () => new Promise(res => {
 export const processarProvaProfissional = async (canvasOriginal, setPreview) => {
     await esperarOpenCV();
     const cv = window.cv;
-
     let src = cv.imread(canvasOriginal);
     let cinza = new cv.Mat();
     cv.cvtColor(src, cinza, cv.COLOR_RGBA2GRAY);
-
     let binaria = new cv.Mat();
-    cv.threshold(cinza, binaria, 140, 255, cv.THRESH_BINARY_INV);
+    cv.threshold(cinza, binaria, 145, 255, cv.THRESH_BINARY_INV);
 
     let contornos = new cv.MatVector();
     let hierarquia = new cv.Mat();
@@ -24,8 +22,7 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         let cnt = contornos.get(i);
         let rect = cv.boundingRect(cnt);
         let area = rect.width * rect.height;
-        let proporcao = rect.width / rect.height;
-        if (area > 300 && area < 5000 && proporcao > 0.8 && proporcao < 1.2) {
+        if (area > 400 && area < 8000 && (rect.width/rect.height) > 0.7 && (rect.width/rect.height) < 1.3) {
             pontosAncoras.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
         }
     }
@@ -44,41 +41,36 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
             inferior[0].x, inferior[0].y, inferior[1].x, inferior[1].y
         ]);
 
-        let ptsDestino = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 800, 0, 800, 1100, 0, 1100]);
+        let ptsDestino = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 800, 0, 800, 1131, 0, 1131]);
         let M = cv.getPerspectiveTransform(ptsOrigem, ptsDestino);
         let reta = new cv.Mat();
-        cv.warpPerspective(binaria, reta, M, new cv.Size(800, 1100));
+        cv.warpPerspective(binaria, reta, M, new cv.Size(800, 1131));
 
-        // --- CALIBRAÇÃO REVISADA ---
+        // COORDENADAS MILIMÉTRICAS DO NOVO GABARITO HTML
         const config = {
-            colunasX: [96, 478],
-            opcoesX: [0, 42, 84, 126, 168],
-            inicioY: 345, // Ajustado para não estourar o limite de 1100
-            espacoY: 28.2, // Espaçamento levemente menor para caber tudo
-            raio: 16
+            colunasX: [76, 461],        
+            opcoesX: [0, 39, 78, 117, 156], 
+            inicioY: 275,               
+            espacoY: 29.5, 
+            raio: 19
         };
 
         let tempRes = [];
-        let corMira = new cv.Scalar(255, 0, 0, 255);
-        let miraSeta = new cv.Mat.zeros(1100, 800, cv.CV_8UC4);
-
+        let miraSeta = new cv.Mat.zeros(1131, 800, cv.CV_8UC4);
         for (let col = 0; col < 2; col++) {
             for (let q = 0; q < 26; q++) {
                 let marcadas = [];
                 for (let opt = 0; opt < 5; opt++) {
                     let x = config.colunasX[col] + config.opcoesX[opt];
                     let y = config.inicioY + (q * config.espacoY);
-
-                    // SEGURANÇA: Não deixa a mira sair da folha (impede o erro undefined)
-                    if (x + config.raio < 800 && y + config.raio < 1100) {
-                        cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raio, y + config.raio), corMira, 1);
-                        let rect = new cv.Rect(x, y, config.raio, config.raio);
-                        let roi = reta.roi(rect);
-                        if (cv.countNonZero(roi) > (config.raio * config.raio * 0.30)) {
-                            marcadas.push(["A", "B", "C", "D", "E"][opt]);
-                        }
-                        roi.delete();
-                    }
+                    
+                    // Desenha a mira vermelha para você conferir
+                    cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raio, y + config.raio), new cv.Scalar(255, 0, 0, 255), 1);
+                    
+                    let rect = new cv.Rect(x, y, config.raio, config.raio);
+                    let roi = reta.roi(rect);
+                    if (cv.countNonZero(roi) > (config.raio * config.raio * 0.35)) marcadas.push(["A","B","C","D","E"][opt]);
+                    roi.delete();
                 }
                 tempRes.push(marcadas.length === 1 ? marcadas[0] : (marcadas.length > 1 ? "X" : ""));
             }
@@ -89,15 +81,10 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         let miraOriginal = new cv.Mat();
         cv.warpPerspective(miraSeta, miraOriginal, M_inv, new cv.Size(src.cols, src.rows));
         cv.add(previewMat, miraOriginal, previewMat);
-
-        let verde = new cv.Scalar(0, 255, 0, 255);
-        cv.line(previewMat, new cv.Point(superior[0].x, superior[0].y), new cv.Point(superior[1].x, superior[1].y), verde, 3);
+        cv.line(previewMat, new cv.Point(superior[0].x, superior[0].y), new cv.Point(superior[1].x, superior[1].y), new cv.Scalar(0, 255, 0, 255), 3);
 
         ptsOrigem.delete(); ptsDestino.delete(); M.delete(); M_inv.delete(); reta.delete(); miraSeta.delete(); miraOriginal.delete();
-    } else {
-        resultados = Array(52).fill("ERRO_ANCORA");
     }
-
     const canvasTemp = document.createElement('canvas');
     cv.imshow(canvasTemp, previewMat);
     setPreview(canvasTemp.toDataURL());
