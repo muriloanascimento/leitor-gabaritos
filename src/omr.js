@@ -11,9 +11,9 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
     let cinza = new cv.Mat();
     cv.cvtColor(src, cinza, cv.COLOR_RGBA2GRAY);
     
-    // Binarização mais agressiva para limpar sombras do scanner
+    // Threshold binário simples - ideal para papel branco e marca preta
     let binaria = new cv.Mat();
-    cv.threshold(cinza, binaria, 120, 255, cv.THRESH_BINARY_INV);
+    cv.threshold(cinza, binaria, 150, 255, cv.THRESH_BINARY_INV);
 
     let contornos = new cv.MatVector();
     let hierarquia = new cv.Mat();
@@ -26,27 +26,27 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         let area = rect.width * rect.height;
         let proporcao = rect.width / rect.height;
 
-        // Filtro mais amplo para detectar as âncoras da HP (quadrados grandes)
-        if (area > 300 && area < 10000 && proporcao > 0.7 && proporcao < 1.3) {
+        // NOVO FILTRO: Limites expandidos para 300 DPI (Área entre 1.000 e 50.000)
+        if (area > 1000 && area < 50000 && proporcao > 0.6 && proporcao < 1.4) {
             candidatos.push({
                 x: rect.x + rect.width / 2,
                 y: rect.y + rect.height / 2,
-                area: area
+                w: rect.width,
+                h: rect.height
             });
         }
     }
 
     let resultados = Array(52).fill("");
-    let previewMat = new cv.Mat();
-    cv.cvtColor(cinza, previewMat, cv.COLOR_GRAY2RGBA);
+    let previewMat = src.clone(); // Usamos o original para o preview ficar bonito
 
-    // LÓGICA INTELIGENTE: Pegar os 4 pontos mais extremos (os cantos reais)
+    // Se temos pelo menos 4 candidatos, vamos pegar os que estão mais nos cantos
     if (candidatos.length >= 4) {
-        // Encontrar os 4 cantos baseado na distância das extremidades
-        let tl = candidatos.reduce((prev, curr) => (curr.x + curr.y < prev.x + prev.y) ? curr : prev);
-        let tr = candidatos.reduce((prev, curr) => (curr.x - curr.y > prev.x - prev.y) ? curr : prev);
-        let bl = candidatos.reduce((prev, curr) => (curr.x - curr.y < prev.x - prev.y) ? curr : prev);
-        let br = candidatos.reduce((prev, curr) => (curr.x + curr.y > prev.x + prev.y) ? curr : prev);
+        // Encontrar as 4 extremidades reais
+        let tl = candidatos.reduce((p, c) => (c.x + c.y < p.x + p.y) ? c : p);
+        let tr = candidatos.reduce((p, c) => (c.x - c.y > p.x - p.y) ? c : p);
+        let bl = candidatos.reduce((p, c) => (c.x - c.y < p.x - p.y) ? c : p);
+        let br = candidatos.reduce((p, c) => (c.x + c.y > p.x + p.y) ? c : p);
 
         let ptsOrigem = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, bl.x, bl.y, br.x, br.y]);
         let ptsDestino = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1000, 0, 0, 1414, 1000, 1414]);
@@ -55,18 +55,17 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         let reta = new cv.Mat();
         cv.warpPerspective(binaria, reta, M, new cv.Size(1000, 1414));
 
-        // COORDENADAS AJUSTADAS PARA O SEU SCAN REAL (HP 300 DPI)
+        // COORDENADAS PARA O SEU GABARITO (Normalizado 1000x1414)
         const config = {
-            colX: [134, 566],           
-            stepX: 53.6,                
-            inicioY: 416,               
-            stepY: 37.3,                
-            raioBusca: 15               
+            colX: [136, 568],           
+            stepX: 53.5,                
+            inicioY: 418,               
+            stepY: 37.4,                
+            raio: 15               
         };
 
         let finalMap = [];
-        let corMira = new cv.Scalar(0, 255, 0, 255); 
-        let miraSeta = new cv.Mat.zeros(1414, 1000, cv.CV_8UC4);
+        let corVerde = new cv.Scalar(0, 255, 0, 255); 
 
         for (let col = 0; col < 2; col++) {
             for (let q = 0; q < 26; q++) {
@@ -75,10 +74,7 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
                     let x = Math.round(config.colX[col] + (opt * config.stepX));
                     let y = Math.round(config.inicioY + (q * config.stepY));
                     
-                    // Desenha a mira para debug
-                    cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raioBusca, y + config.raioBusca), corMira, 1);
-
-                    let rect = new cv.Rect(x, y, config.raioBusca, config.raioBusca);
+                    let rect = new cv.Rect(x, y, config.raio, config.raio);
                     let roi = reta.roi(rect);
                     intensidades.push(cv.countNonZero(roi));
                     roi.delete();
@@ -88,9 +84,10 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
                 let idxVencedor = intensidades.indexOf(max);
                 let segundoMax = [...intensidades].sort((a,b) => b-a)[1];
 
-                if (max > 45 && max > (segundoMax * 1.6)) {
+                // Lógica de decisão: Se a bolinha tem marcação clara comparada às outras
+                if (max > 40 && max > (segundoMax * 1.6)) {
                     finalMap.push(["A", "B", "C", "D", "E"][idxVencedor]);
-                } else if (max > 45) {
+                } else if (max > 40) {
                     finalMap.push("X");
                 } else {
                     finalMap.push("");
@@ -99,14 +96,19 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
         }
         resultados = finalMap;
 
-        // Visualização da correção no Preview
-        let M_inv = cv.getPerspectiveTransform(ptsDestino, ptsOrigem);
-        let miraOriginal = new cv.Mat();
-        cv.warpPerspective(miraSeta, miraOriginal, M_inv, new cv.Size(src.cols, src.rows));
-        cv.add(previewMat, miraOriginal, previewMat);
+        // Desenhar as âncoras detectadas para você conferir na tela
+        cv.rectangle(previewMat, new cv.Point(tl.x - tl.w/2, tl.y - tl.h/2), new cv.Point(tl.x + tl.w/2, tl.y + tl.h/2), corVerde, 5);
+        cv.rectangle(previewMat, new cv.Point(tr.x - tr.w/2, tr.y - tr.h/2), new cv.Point(tr.x + tr.w/2, tr.y + tr.h/2), corVerde, 5);
+        cv.rectangle(previewMat, new cv.Point(bl.x - bl.w/2, bl.y - bl.h/2), new cv.Point(bl.x + bl.w/2, bl.y + bl.h/2), corVerde, 5);
+        cv.rectangle(previewMat, new cv.Point(br.x - br.w/2, br.y - br.h/2), new cv.Point(br.x + br.w/2, br.y + br.h/2), corVerde, 5);
 
-        ptsOrigem.delete(); ptsDestino.delete(); M.delete(); reta.delete(); miraSeta.delete(); miraOriginal.delete(); M_inv.delete();
+        ptsOrigem.delete(); ptsDestino.delete(); M.delete(); reta.delete();
     } else {
+        // Se não achou, vamos desenhar o que ele achou em vermelho para debug
+        let corVermelha = new cv.Scalar(255, 0, 0, 255);
+        candidatos.forEach(c => {
+            cv.circle(previewMat, new cv.Point(c.x, c.y), 20, corVermelha, 2);
+        });
         resultados = Array(52).fill("ERRO_ANCORA");
     }
 
