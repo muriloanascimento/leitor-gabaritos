@@ -11,21 +11,28 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
     let cinza = new cv.Mat();
     cv.cvtColor(src, cinza, cv.COLOR_RGBA2GRAY);
     
-    // Binarização adaptativa (ajusta conforme a iluminação do scanner)
+    // Binarização mais agressiva para limpar sombras do scanner
     let binaria = new cv.Mat();
-    cv.adaptiveThreshold(cinza, binaria, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 5);
+    cv.threshold(cinza, binaria, 120, 255, cv.THRESH_BINARY_INV);
 
     let contornos = new cv.MatVector();
     let hierarquia = new cv.Mat();
     cv.findContours(binaria, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    let pontosAncoras = [];
+    let candidatos = [];
     for (let i = 0; i < contornos.size(); ++i) {
         let cnt = contornos.get(i);
         let rect = cv.boundingRect(cnt);
-        // Busca os 4 quadrados pretos dos cantos
-        if (rect.width > 25 && rect.width < 100 && Math.abs(rect.width - rect.height) < 15) {
-            pontosAncoras.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+        let area = rect.width * rect.height;
+        let proporcao = rect.width / rect.height;
+
+        // Filtro mais amplo para detectar as âncoras da HP (quadrados grandes)
+        if (area > 300 && area < 10000 && proporcao > 0.7 && proporcao < 1.3) {
+            candidatos.push({
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2,
+                area: area
+            });
         }
     }
 
@@ -33,32 +40,33 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
     let previewMat = new cv.Mat();
     cv.cvtColor(cinza, previewMat, cv.COLOR_GRAY2RGBA);
 
-    if (pontosAncoras.length >= 4) {
-        // 1. ALINHAMENTO GEOMÉTRICO
-        pontosAncoras.sort((a, b) => a.y - b.y);
-        let superior = pontosAncoras.slice(0, 2).sort((a, b) => a.x - b.x);
-        let inferior = pontosAncoras.slice(pontosAncoras.length - 2).sort((a, b) => b.x - a.x);
+    // LÓGICA INTELIGENTE: Pegar os 4 pontos mais extremos (os cantos reais)
+    if (candidatos.length >= 4) {
+        // Encontrar os 4 cantos baseado na distância das extremidades
+        let tl = candidatos.reduce((prev, curr) => (curr.x + curr.y < prev.x + prev.y) ? curr : prev);
+        let tr = candidatos.reduce((prev, curr) => (curr.x - curr.y > prev.x - prev.y) ? curr : prev);
+        let bl = candidatos.reduce((prev, curr) => (curr.x - curr.y < prev.x - prev.y) ? curr : prev);
+        let br = candidatos.reduce((prev, curr) => (curr.x + curr.y > prev.x + prev.y) ? curr : prev);
 
-        let ptsOrigem = cv.matFromArray(4, 1, cv.CV_32FC2, [
-            superior[0].x, superior[0].y, superior[1].x, superior[1].y,
-            inferior[0].x, inferior[0].y, inferior[1].x, inferior[1].y
-        ]);
-        let ptsDestino = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1000, 0, 1000, 1414, 0, 1414]);
+        let ptsOrigem = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, bl.x, bl.y, br.x, br.y]);
+        let ptsDestino = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1000, 0, 0, 1414, 1000, 1414]);
+        
         let M = cv.getPerspectiveTransform(ptsOrigem, ptsDestino);
         let reta = new cv.Mat();
         cv.warpPerspective(binaria, reta, M, new cv.Size(1000, 1414));
 
-        // 2. COORDENADAS CALCULADAS PARA O NOVO GABARITO
+        // COORDENADAS AJUSTADAS PARA O SEU SCAN REAL (HP 300 DPI)
         const config = {
-            colX: [136, 568],           // Início das bolinhas A (Col 1 e Col 2)
-            stepX: 53.5,                // Espaço horizontal entre A->B->C->D...
-            inicioY: 418,               // Início vertical da Questão 01 e 27
-            stepY: 37.4,                // Espaço vertical entre linhas
-            raioBusca: 14               // Olhamos apenas o "miolo" (14x14 pixels)
+            colX: [134, 566],           
+            stepX: 53.6,                
+            inicioY: 416,               
+            stepY: 37.3,                
+            raioBusca: 15               
         };
 
         let finalMap = [];
-        let corMira = new cv.Scalar(0, 255, 0, 255); // Verde para o preview
+        let corMira = new cv.Scalar(0, 255, 0, 255); 
+        let miraSeta = new cv.Mat.zeros(1414, 1000, cv.CV_8UC4);
 
         for (let col = 0; col < 2; col++) {
             for (let q = 0; q < 26; q++) {
@@ -67,35 +75,41 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
                     let x = Math.round(config.colX[col] + (opt * config.stepX));
                     let y = Math.round(config.inicioY + (q * config.stepY));
                     
-                    // Medimos a "sujeira" (caneta) dentro da coordenada
+                    // Desenha a mira para debug
+                    cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raioBusca, y + config.raioBusca), corMira, 1);
+
                     let rect = new cv.Rect(x, y, config.raioBusca, config.raioBusca);
                     let roi = reta.roi(rect);
                     intensidades.push(cv.countNonZero(roi));
                     roi.delete();
                 }
 
-                // 3. LÓGICA ESTATÍSTICA (O MAIS ESCURO VENCE)
                 let max = Math.max(...intensidades);
                 let idxVencedor = intensidades.indexOf(max);
                 let segundoMax = [...intensidades].sort((a,b) => b-a)[1];
 
-                // Critério: Mínimo de 30 pixels e tem que ser 1.7x mais escuro que o resto
-                if (max > 35 && max > (segundoMax * 1.7)) {
+                if (max > 45 && max > (segundoMax * 1.6)) {
                     finalMap.push(["A", "B", "C", "D", "E"][idxVencedor]);
-                } else if (max > 35) {
-                    finalMap.push("X"); // Dubiedade/Rasura
+                } else if (max > 45) {
+                    finalMap.push("X");
                 } else {
-                    finalMap.push("");  // Branco
+                    finalMap.push("");
                 }
             }
         }
         resultados = finalMap;
-        ptsOrigem.delete(); ptsDestino.delete(); M.delete(); reta.delete();
+
+        // Visualização da correção no Preview
+        let M_inv = cv.getPerspectiveTransform(ptsDestino, ptsOrigem);
+        let miraOriginal = new cv.Mat();
+        cv.warpPerspective(miraSeta, miraOriginal, M_inv, new cv.Size(src.cols, src.rows));
+        cv.add(previewMat, miraOriginal, previewMat);
+
+        ptsOrigem.delete(); ptsDestino.delete(); M.delete(); reta.delete(); miraSeta.delete(); miraOriginal.delete(); M_inv.delete();
     } else {
         resultados = Array(52).fill("ERRO_ANCORA");
     }
 
-    // Gerar preview para o usuário ver
     const canvasTemp = document.createElement('canvas');
     cv.imshow(canvasTemp, previewMat);
     setPreview(canvasTemp.toDataURL());
