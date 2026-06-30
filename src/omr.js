@@ -10,8 +10,10 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
     let src = cv.imread(canvasOriginal);
     let cinza = new cv.Mat();
     cv.cvtColor(src, cinza, cv.COLOR_RGBA2GRAY);
+    
+    // Binarização adaptativa (ajusta conforme a iluminação do scanner)
     let binaria = new cv.Mat();
-    cv.threshold(cinza, binaria, 140, 255, cv.THRESH_BINARY_INV);
+    cv.adaptiveThreshold(cinza, binaria, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 5);
 
     let contornos = new cv.MatVector();
     let hierarquia = new cv.Mat();
@@ -21,7 +23,8 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
     for (let i = 0; i < contornos.size(); ++i) {
         let cnt = contornos.get(i);
         let rect = cv.boundingRect(cnt);
-        if (rect.width * rect.height > 500 && rect.width / rect.height > 0.8) {
+        // Busca os 4 quadrados pretos dos cantos
+        if (rect.width > 25 && rect.width < 100 && Math.abs(rect.width - rect.height) < 15) {
             pontosAncoras.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
         }
     }
@@ -31,6 +34,7 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
     cv.cvtColor(cinza, previewMat, cv.COLOR_GRAY2RGBA);
 
     if (pontosAncoras.length >= 4) {
+        // 1. ALINHAMENTO GEOMÉTRICO
         pontosAncoras.sort((a, b) => a.y - b.y);
         let superior = pontosAncoras.slice(0, 2).sort((a, b) => a.x - b.x);
         let inferior = pontosAncoras.slice(pontosAncoras.length - 2).sort((a, b) => b.x - a.x);
@@ -39,53 +43,63 @@ export const processarProvaProfissional = async (canvasOriginal, setPreview) => 
             superior[0].x, superior[0].y, superior[1].x, superior[1].y,
             inferior[0].x, inferior[0].y, inferior[1].x, inferior[1].y
         ]);
-
-        // NORMALIZAÇÃO: Forçamos a imagem para 1000x1414 (O tamanho do nosso HTML)
         let ptsDestino = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1000, 0, 1000, 1414, 0, 1414]);
         let M = cv.getPerspectiveTransform(ptsOrigem, ptsDestino);
         let reta = new cv.Mat();
         cv.warpPerspective(binaria, reta, M, new cv.Size(1000, 1414));
 
-        // COORDENADAS ESPELHADAS DO HTML
+        // 2. COORDENADAS CALCULADAS PARA O NOVO GABARITO
         const config = {
-            colunasX: [120, 580],       
-            opcoesX: [0, 50, 100, 150, 200], 
-            inicioY: 305,               
-            espacoY: 40, 
-            raio: 22
+            colX: [136, 568],           // Início das bolinhas A (Col 1 e Col 2)
+            stepX: 53.5,                // Espaço horizontal entre A->B->C->D...
+            inicioY: 418,               // Início vertical da Questão 01 e 27
+            stepY: 37.4,                // Espaço vertical entre linhas
+            raioBusca: 14               // Olhamos apenas o "miolo" (14x14 pixels)
         };
 
-        let tempRes = [];
-        let miraSeta = new cv.Mat.zeros(1414, 1000, cv.CV_8UC4);
+        let finalMap = [];
+        let corMira = new cv.Scalar(0, 255, 0, 255); // Verde para o preview
+
         for (let col = 0; col < 2; col++) {
             for (let q = 0; q < 26; q++) {
-                let marcadas = [];
+                let intensidades = [];
                 for (let opt = 0; opt < 5; opt++) {
-                    let x = config.colunasX[col] + config.opcoesX[opt];
-                    let y = config.inicioY + (q * config.espacoY);
+                    let x = Math.round(config.colX[col] + (opt * config.stepX));
+                    let y = Math.round(config.inicioY + (q * config.stepY));
                     
-                    cv.rectangle(miraSeta, new cv.Point(x, y), new cv.Point(x + config.raio, y + config.raio), new cv.Scalar(255, 0, 0, 255), 1);
-                    
-                    let rect = new cv.Rect(x, y, config.raio, config.raio);
+                    // Medimos a "sujeira" (caneta) dentro da coordenada
+                    let rect = new cv.Rect(x, y, config.raioBusca, config.raioBusca);
                     let roi = reta.roi(rect);
-                    if (cv.countNonZero(roi) > (config.raio * config.raio * 0.25)) marcadas.push(["A","B","C","D","E"][opt]);
+                    intensidades.push(cv.countNonZero(roi));
                     roi.delete();
                 }
-                tempRes.push(marcadas.length === 1 ? marcadas[0] : (marcadas.length > 1 ? "X" : ""));
+
+                // 3. LÓGICA ESTATÍSTICA (O MAIS ESCURO VENCE)
+                let max = Math.max(...intensidades);
+                let idxVencedor = intensidades.indexOf(max);
+                let segundoMax = [...intensidades].sort((a,b) => b-a)[1];
+
+                // Critério: Mínimo de 30 pixels e tem que ser 1.7x mais escuro que o resto
+                if (max > 35 && max > (segundoMax * 1.7)) {
+                    finalMap.push(["A", "B", "C", "D", "E"][idxVencedor]);
+                } else if (max > 35) {
+                    finalMap.push("X"); // Dubiedade/Rasura
+                } else {
+                    finalMap.push("");  // Branco
+                }
             }
         }
-        resultados = tempRes;
-
-        let M_inv = cv.getPerspectiveTransform(ptsDestino, ptsOrigem);
-        let miraOriginal = new cv.Mat();
-        cv.warpPerspective(miraSeta, miraOriginal, M_inv, new cv.Size(src.cols, src.rows));
-        cv.add(previewMat, miraOriginal, previewMat);
-
-        ptsOrigem.delete(); ptsDestino.delete(); M.delete(); M_inv.delete(); reta.delete(); miraSeta.delete(); miraOriginal.delete();
+        resultados = finalMap;
+        ptsOrigem.delete(); ptsDestino.delete(); M.delete(); reta.delete();
+    } else {
+        resultados = Array(52).fill("ERRO_ANCORA");
     }
+
+    // Gerar preview para o usuário ver
     const canvasTemp = document.createElement('canvas');
     cv.imshow(canvasTemp, previewMat);
     setPreview(canvasTemp.toDataURL());
+    
     src.delete(); cinza.delete(); binaria.delete(); contornos.delete(); hierarquia.delete(); previewMat.delete();
     return resultados;
 };
